@@ -1,0 +1,15 @@
+[project]
+name = "geostl"
+version = "0.1.0"
+description = "Convert GeoTIFF DEM to STL for 3D printing"
+requires-python = ">=3.10"
+dependencies = [
+    "rasterio",
+    "numpy",
+    "pyproj",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+]

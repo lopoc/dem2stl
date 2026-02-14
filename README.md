@@ -37,6 +37,9 @@ uv run dem2stl.py <input.tif> --bounds SW_LON SW_LAT NE_LON NE_LAT [--scale N] [
 | `--bounds` | Crop rectangle: SW longitude, SW latitude, NE longitude, NE latitude (WGS84) |
 | `--scale` | Map scale 1:N. Default: `10000` (1km = 100mm). STL output is in mm. |
 | `--base-height` | Absolute elevation (m) for the model base. Default: minimum elevation in crop |
+| `--base-thickness` | Thickness of the solid base under the terrain, in mm. Default: `2` |
+| `--ref-lon` | Reference longitude for Y computation. Default: GeoTIFF center longitude |
+| `--ref-lat` | Reference latitude for X computation. Default: GeoTIFF center latitude |
 | `--output` | Output STL file. Default: `<input_name>.stl` |
 
 ### Examples
@@ -58,14 +61,16 @@ uv run dem2stl.py w47085_s10.tif --bounds 13.533 42.441 13.596 42.496 --output g
 
 ### Stacking Pieces
 
-To print adjacent terrain tiles that fit together, use the same `--base-height` for all pieces. This ensures they share the same elevation reference and align when placed next to each other.
+Adjacent tiles from the same GeoTIFF align automatically — edges match at the pixel grid level. Just use the same `--base-height` for all pieces:
 
 ```bash
 # Tile A
 uv run dem2stl.py dem.tif --bounds 13.50 42.40 13.55 42.45 --base-height 400 --output tile_a.stl
-# Tile B (adjacent)
+# Tile B (adjacent east)
 uv run dem2stl.py dem.tif --bounds 13.55 42.40 13.60 42.45 --base-height 400 --output tile_b.stl
 ```
+
+When tiling across multiple GeoTIFF files, pass `--ref-lon` and `--ref-lat` with the same values to all runs to ensure alignment.
 
 If terrain in a tile goes below the base height, the tool warns you and asks to confirm before clipping those areas flat.
 
@@ -78,8 +83,8 @@ uv run --with pytest pytest tests/
 ## How It Works
 
 1. Reads the GeoTIFF and auto-detects its CRS
-2. Transforms lat/lon bounds to the file's coordinate system
-3. Crops the DEM to the specified rectangle
+2. Transforms lat/lon bounds per-edge (X at ref latitude, Y at ref longitude) and snaps to pixel grid
+3. Crops the DEM to the snapped rectangle
 4. Scales all coordinates to mm based on `--scale`
 5. Generates a watertight mesh: top surface + flat bottom (2 triangles) + 4 side walls
 6. Writes binary STL

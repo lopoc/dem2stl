@@ -8,6 +8,7 @@
 # ///
 
 import argparse
+import math
 import os
 import sys
 
@@ -30,6 +31,24 @@ def main():
         required=True,
         metavar=("SW_LON", "SW_LAT", "NE_LON", "NE_LAT"),
         help="Crop rectangle as SW longitude, SW latitude, NE longitude, NE latitude (EPSG:4326)",
+    )
+    parser.add_argument(
+        "--ref-lon",
+        type=float,
+        default=None,
+        metavar="LON",
+        help="Reference longitude for Y computation. "
+        "Set to the same value for all tiles to ensure matching Y bounds. "
+        "Default: center longitude of the GeoTIFF.",
+    )
+    parser.add_argument(
+        "--ref-lat",
+        type=float,
+        default=None,
+        metavar="LAT",
+        help="Reference latitude for X computation. "
+        "Set to the same value for all tiles to ensure matching X bounds. "
+        "Default: center latitude of the GeoTIFF.",
     )
     parser.add_argument(
         "--output",
@@ -56,10 +75,28 @@ def main():
     with rasterio.open(args.input) as src:
         file_crs = src.crs
         transformer = Transformer.from_crs("EPSG:4326", file_crs, always_xy=True)
-        left, bottom = transformer.transform(sw_lon, sw_lat)
-        right, top = transformer.transform(ne_lon, ne_lat)
 
+        # Per-edge projection: X at ref_lat, Y at ref_lon.
+        # Default to GeoTIFF center so all tiles from the same file align automatically.
+        inv_transformer = Transformer.from_crs(file_crs, "EPSG:4326", always_xy=True)
+        tif_center_x = src.transform.c + (src.width / 2) * src.transform.a
+        tif_center_y = src.transform.f + (src.height / 2) * src.transform.e
+        tif_center_lon, tif_center_lat = inv_transformer.transform(tif_center_x, tif_center_y)
+        ref_lat = args.ref_lat if args.ref_lat is not None else tif_center_lat
+        ref_lon = args.ref_lon if args.ref_lon is not None else tif_center_lon
+        left, _ = transformer.transform(sw_lon, ref_lat)
+        right, _ = transformer.transform(ne_lon, ref_lat)
+        _, bottom = transformer.transform(ref_lon, sw_lat)
+        _, top = transformer.transform(ref_lon, ne_lat)
+
+        # Snap outward to pixel grid (tiles share 1 pixel at boundaries)
         window = from_bounds(left, bottom, right, top, src.transform)
+        col_off = int(window.col_off)
+        row_off = int(window.row_off)
+        col_end = math.ceil(window.col_off + window.width)
+        row_end = math.ceil(window.row_off + window.height)
+        window = rasterio.windows.Window(col_off, row_off, col_end - col_off, row_end - row_off)
+
         data = src.read(1, window=window)
         transform = src.window_transform(window)
         nodata = src.nodata

@@ -8,6 +8,7 @@
 # ///
 
 import argparse
+import math
 import os
 import struct
 import sys
@@ -42,11 +43,36 @@ def parse_args():
         "Default: minimum elevation in the crop.",
     )
     parser.add_argument(
+        "--base-thickness",
+        type=float,
+        default=2.0,
+        metavar="MM",
+        help="Thickness of the solid base under the terrain, in mm. Default: 2.",
+    )
+    parser.add_argument(
         "--scale",
         type=int,
         default=10000,
         metavar="N",
         help="Map scale 1:N. Default: 10000 (1km = 100mm).",
+    )
+    parser.add_argument(
+        "--ref-lon",
+        type=float,
+        default=None,
+        metavar="LON",
+        help="Reference longitude for Y computation. "
+        "Set to the same value for all tiles to ensure matching Y bounds. "
+        "Default: center longitude of the GeoTIFF.",
+    )
+    parser.add_argument(
+        "--ref-lat",
+        type=float,
+        default=None,
+        metavar="LAT",
+        help="Reference latitude for X computation. "
+        "Set to the same value for all tiles to ensure matching X bounds. "
+        "Default: center latitude of the GeoTIFF.",
     )
     parser.add_argument(
         "--output",
@@ -79,12 +105,32 @@ def main():
     with rasterio.open(args.input) as src:
         file_crs = src.crs
         transformer = Transformer.from_crs("EPSG:4326", file_crs, always_xy=True)
-        left, bottom = transformer.transform(sw_lon, sw_lat)
-        right, top = transformer.transform(ne_lon, ne_lat)
-        print(f"CRS: {file_crs}")
-        print(f"Projected bounds: {left:.0f}, {bottom:.0f} -> {right:.0f}, {top:.0f}")
 
+        # Per-edge projection: X at ref_lat, Y at ref_lon.
+        # Default to GeoTIFF center so all tiles from the same file align automatically.
+        inv_transformer = Transformer.from_crs(file_crs, "EPSG:4326", always_xy=True)
+        tif_center_x = src.transform.c + (src.width / 2) * src.transform.a
+        tif_center_y = src.transform.f + (src.height / 2) * src.transform.e
+        tif_center_lon, tif_center_lat = inv_transformer.transform(tif_center_x, tif_center_y)
+        ref_lat = args.ref_lat if args.ref_lat is not None else tif_center_lat
+        ref_lon = args.ref_lon if args.ref_lon is not None else tif_center_lon
+        left, _ = transformer.transform(sw_lon, ref_lat)
+        right, _ = transformer.transform(ne_lon, ref_lat)
+        _, bottom = transformer.transform(ref_lon, sw_lat)
+        _, top = transformer.transform(ref_lon, ne_lat)
+
+        # Snap outward to pixel grid (tiles share 1 pixel at boundaries)
         window = from_bounds(left, bottom, right, top, src.transform)
+        col_off = int(window.col_off)
+        row_off = int(window.row_off)
+        col_end = math.ceil(window.col_off + window.width)
+        row_end = math.ceil(window.row_off + window.height)
+        window = rasterio.windows.Window(col_off, row_off, col_end - col_off, row_end - row_off)
+
+        snapped = rasterio.windows.bounds(window, src.transform)
+        print(f"CRS: {file_crs}")
+        print(f"Projected bounds (grid-snapped): {snapped[0]:.0f}, {snapped[1]:.0f} -> {snapped[2]:.0f}, {snapped[3]:.0f}")
+
         dem = src.read(1, window=window).astype(np.float32)
         nodata = src.nodata
         pixel_size = src.transform[0]  # meters per pixel
@@ -125,7 +171,7 @@ def main():
     # Scale to mm: XY = pixel_index * pixel_size * mm_per_m, Z = (elev - base) * mm_per_m
     xy_step = pixel_size * mm_per_m  # mm between pixels
     dem = (dem - base_height) * mm_per_m
-    base_z = -0.05 * dem.max()  # 5% base thickness
+    base_z = -args.base_thickness
 
     rows, cols = dem.shape
     x_size = (cols - 1) * xy_step
